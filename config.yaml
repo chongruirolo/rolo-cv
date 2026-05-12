@@ -1,0 +1,24 @@
+camera:
+  width: 1280
+  height: 720
+  fps: 30
+  # 4x4 rigid transform from camera frame to robot base frame.
+  # Replace with your hand-eye calibration result.
+  # Identity matrix is a placeholder — robot coords will be WRONG until calibrated.
+  T_cam_to_robot:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+
+vision:
+  confidence_threshold: 0.4
+
+robot:
+  can_interface: "can0"
+
+# Drop zone in robot base frame (metres) — also set in robot_controller.py
+drop_zone_xyz: [0.35, -0.20, 0.15]
+
+# Safety limit on total picks per run
+max_picks: 50

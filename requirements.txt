@@ -1,0 +1,19 @@
+# Vision
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+
+# Numerics
+numpy>=1.24.0
+scipy>=1.11.0
+
+# Config
+pyyaml>=6.0
+
+# Robot SDK (AgileX Piper)
+# pip install piper-sdk   (or: pip install git+https://github.com/agilex-robotics/piper_sdk.git)
+
+# Camera SDK (Orbbec Gemini 336L)
+# pyorbbecsdk is NOT on PyPI — build from source:
+#   git clone https://github.com/orbbec/pyorbbecsdk
+#   cd pyorbbecsdk && pip install -e .
+# OR use the prebuilt wheel from the Orbbec releases page.
