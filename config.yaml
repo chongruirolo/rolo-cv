@@ -12,7 +12,36 @@ camera:
     - [0.0, 0.0, 0.0, 1.0]
 
 vision:
-  confidence_threshold: 0.4
+  # Path to YOLO model weights.
+  # yolov8s-worldv2.pt — zero-shot, works immediately, no training needed.
+  # wings.pt           — your trained model, much better accuracy.
+  # backend: "yolo" — needs trained model, gives class labels
+  # backend: "sam"  — works immediately, no training, segments everything
+  backend: "yolo"
+
+  # yolo backend: "yolov8n-seg.pt" (generic) 
+  # sam  backend: "FastSAM-s.pt" (fast) or "FastSAM-x.pt" (accurate)
+  model_path: "yolov8n-seg.pt"
+
+  # Minimum YOLO confidence to accept a detection [0–1].
+  # Lower = more detections but more false positives.
+  confidence: 0.1
+
+  # Non-maximum suppression IoU threshold [0–1].
+  # Lower = stricter overlap removal (fewer merged detections).
+  iou: 0.45
+
+  # Inference device: "cpu", "cuda" (Nvidia GPU), or "mps" (Apple silicon).
+  device: "cpu"
+
+  # Region of interest as fractions of frame size [x1, y1, x2, y2].
+  # Only this area is passed to the model — everything outside is ignored.
+  # [0.0, 0.0, 0.5, 0.5] = top-left quarter (where the chopping board is).
+  roi: [0.2, 0.3, 0.7, 0.6]
+
+  # Elevation band for height filtering (centimetres above the cutting board).
+  elevation_min_cm: 1.0
+  elevation_max_cm: 10.0
 
 robot:
   can_interface: "can0"

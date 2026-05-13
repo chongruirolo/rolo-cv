@@ -1,3 +1,15 @@
-models/*.pt
+# Python
 __pycache__/
 *.pyc
+.venv/
+
+# Model weights (large binary files — download separately)
+*.pt
+*.pth
+models/
+
+# Training data and outputs
+data/
+runs/
+Log/
+diagnose_output.jpg
