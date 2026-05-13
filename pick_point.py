@@ -2,11 +2,11 @@
 Pick-point selection and detection scoring.
 
 Scoring factors (normalised to [0,1], then weighted):
-  confidence       : blob fill ratio — compact blob = better suction grip
-  isolation        : distance to nearest neighbour — further = easier pick
-  depth_flatness   : low depth variance inside mask = flat surface
+  confidence       : blob fill ratio — compact blob = better grip
+  isolation        : distance to nearest neighbour — further = gripper can close
+  depth_flatness   : low depth variance inside mask = flat, stable surface
   height_priority  : prefer wings flat on the board (low height_above_table)
-                     over stacked wings — flat wings are stable for suction
+                     over stacked wings — flat wings are stable to grasp
 
 The pick order produced by this scorer directly drives the robot: it will
 always attempt the most accessible wing first.
@@ -52,17 +52,20 @@ def score_all_detections(
     detections: list[Detection],
     depth: np.ndarray,
     w_confidence: float = 0.20,
-    w_isolation: float = 0.15,
-    w_flatness:  float = 0.35,
+    w_isolation: float = 0.35,
+    w_flatness:  float = 0.15,
     w_height:    float = 0.30,
 ) -> list[tuple[Detection, float, int, int]]:
     """
     Score every detection.  Returns list of (detection, score, u, v)
     sorted best-first.
 
+    Isolation weighting (w_isolation=0.35): gripper fingers need clearance on
+    both sides of the wing.  Isolated wings score highest; wings touching
+    neighbours score lowest.
+
     Height weighting (w_height=0.30): a wing flat on the board scores 1.0;
-    a wing stacked N cm above scores proportionally less.  This makes the
-    robot preferentially pick stable, accessible wings.
+    a wing stacked above scores proportionally less.
     """
     if not detections:
         return []
