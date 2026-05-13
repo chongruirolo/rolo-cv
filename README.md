@@ -1,6 +1,6 @@
 # rolo-cv — Chicken Wing Pick-and-Place Pipeline
 
-A computer vision pipeline that detects individual chicken wings on a cutting board using an RGB-D camera and commands a robot arm with a suction gripper to pick and drop them one at a time.
+A computer vision pipeline that detects individual chicken wings on a cutting board using an RGB-D camera and commands a robot arm with a finger gripper to pick and drop them one at a time.
 
 ---
 
@@ -10,7 +10,7 @@ A computer vision pipeline that detects individual chicken wings on a cutting bo
 |---|---|
 | Camera | Orbbec Gemini 336L (USB RGB-D) |
 | Robot | AgileX Piper 6-DOF arm |
-| Gripper | Suction cup end-effector |
+| Gripper | Finger gripper end-effector |
 
 ---
 
@@ -35,10 +35,10 @@ vision.py — segment each wing
         │
         ▼
 pick_point.py — score every wing, pick the best
-  • Confidence  (20%) — how certain the model is
-  • Flatness    (35%) — flat surface = better suction seal
+  • Isolation   (35%) — clearance for gripper fingers
   • Height      (30%) — prefer flat/low wings over stacked
-  • Isolation   (15%) — distance to nearest neighbour
+  • Confidence  (20%) — how certain the model is
+  • Flatness    (15%) — reasonably flat surface for grip
         │
         ▼
 geometry.py — convert pixel to robot coordinate
@@ -47,13 +47,14 @@ geometry.py — convert pixel to robot coordinate
         │
         ▼
 robot_controller.py — physical pick sequence
-  1. Hover 10 cm above target
-  2. Descend to wing
-  3. Suction on, dwell 0.3s
-  4. Lift back up
-  5. Move to drop zone
-  6. Suction off
-  7. Return home
+  1. Open gripper
+  2. Hover 10 cm above target
+  3. Descend to wing
+  4. Close gripper, dwell 0.3s
+  5. Lift back up
+  6. Move to drop zone
+  7. Open gripper to release
+  8. Return home
         │
         └── Repeat until board is empty
 ```
@@ -218,12 +219,12 @@ Every detected wing is scored on four factors. The highest-scoring wing is sent 
 
 | Factor | Weight | Why |
 |---|---|---|
-| Flatness | 35% | Flat surface = better suction seal |
-| Height | 30% | Prefer flat/low wings — more stable |
+| Isolation | 35% | Gripper fingers need clearance on both sides |
+| Height | 30% | Prefer flat/low wings — more stable to grasp |
 | Confidence | 20% | Model certainty |
-| Isolation | 15% | Distance to nearest neighbour |
+| Flatness | 15% | Reasonably flat surface helps consistent grip |
 
-Weights are in `pick_point.py` and will be tuned over time using pick outcome data.
+Isolation is weighted highest because gripper fingers need clear space on both sides of the wing to close. Weights are in `pick_point.py` and will be tuned over time using pick outcome data.
 
 ---
 
@@ -332,7 +333,7 @@ The pipeline handles specular wings by reading depth from the cutting board surf
 - [x] FastSAM zero-shot segmentation backend
 - [x] YOLOv8-seg backend (awaiting training data)
 - [x] SVD plane fitting for height measurement
-- [x] Suction-optimised pick scoring
+- [x] Pick scoring (isolation-prioritised for gripper)
 - [x] ROI crop to restrict detection area
 - [x] Hand-eye calibration utility
 - [x] Training data collection utility

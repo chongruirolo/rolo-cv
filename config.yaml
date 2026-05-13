@@ -37,7 +37,7 @@ vision:
   # Region of interest as fractions of frame size [x1, y1, x2, y2].
   # Only this area is passed to the model — everything outside is ignored.
   # [0.0, 0.0, 0.5, 0.5] = top-left quarter (where the chopping board is).
-  roi: [0.2, 0.3, 0.7, 0.6]
+  roi: null
 
   # Elevation band for height filtering (centimetres above the cutting board).
   elevation_min_cm: 1.0

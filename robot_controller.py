@@ -6,7 +6,7 @@ Install: pip install piper-sdk
 Docs:    https://github.com/agilex-robotics/piper_sdk
 
 For MVP the drop zone is hardcoded in robot base frame.
-Suction is controlled via the Piper's end-effector IO (gripper channel).
+The end-effector is a gripper; GripperCtrl value 0 = open, 1000 = closed.
 """
 
 import time
@@ -41,45 +41,48 @@ class RobotController:
     def home(self):
         """Move to a safe resting position above the tray."""
         self._arm.MotionCtrl_2(0x01, 0x00, int(MOVE_SPEED * 100))
-        # Piper uses joint-angle home via built-in command
         self._arm.JointCtrl(0, 0, 0, 0, 0, 0)
         self._wait_for_motion()
 
     def pick_and_drop(self, robot_xyz: np.ndarray):
         """
         Full pick sequence:
-          1. Move above target
-          2. Descend
-          3. Suction on
-          4. Lift
-          5. Move to drop zone
-          6. Suction off
-          7. Return home
+          1. Open gripper
+          2. Move above target
+          3. Descend
+          4. Close gripper
+          5. Lift
+          6. Move to drop zone
+          7. Open gripper to release
+          8. Return home
         """
         x, y, z = robot_xyz.tolist()
 
-        # 1. Approach (hover above target)
+        # 1. Open gripper before approaching
+        self._open_gripper()
+
+        # 2. Approach (hover above target)
         self._move_cartesian(x, y, z + APPROACH_CLEARANCE)
 
-        # 2. Descend to pick height
+        # 3. Descend to pick height
         self._move_cartesian(x, y, z)
 
-        # 3. Activate suction
-        self._set_suction(on=True)
-        time.sleep(0.3)     # brief dwell to establish seal
+        # 4. Close gripper to grip the wing
+        self._close_gripper()
+        time.sleep(0.3)     # brief dwell to confirm grip
 
-        # 4. Lift back to approach height
+        # 5. Lift back to approach height
         self._move_cartesian(x, y, z + APPROACH_CLEARANCE)
 
-        # 5. Move to drop zone (approach height)
+        # 6. Move to drop zone (approach height)
         dx, dy, dz = DROP_ZONE_XYZ.tolist()
         self._move_cartesian(dx, dy, dz + APPROACH_CLEARANCE)
 
-        # 6. Release
-        self._set_suction(on=False)
+        # 7. Release
+        self._open_gripper()
         time.sleep(0.2)
 
-        # 7. Home
+        # 8. Home
         self.home()
 
     # ------------------------------------------------------------------
@@ -88,7 +91,7 @@ class RobotController:
 
     def _move_cartesian(self, x: float, y: float, z: float):
         """Move end-effector to (x, y, z) in robot base frame. Blocking."""
-        # Piper SDK expects mm and millidegrees; convert metres -> mm.
+        # Piper SDK expects mm; convert metres -> mm.
         # Orientation: keep wrist pointing straight down (Rx=0, Ry=0, Rz=0).
         self._arm.EndPoseCtrl(
             int(x * 1000), int(y * 1000), int(z * 1000),
@@ -97,11 +100,11 @@ class RobotController:
         )
         self._wait_for_motion()
 
-    def _set_suction(self, on: bool):
-        # Piper controls end-effector IO through GripperCtrl.
-        # value=1000 = fully closed (suction on), value=0 = open (suction off).
-        gripper_val = 1000 if on else 0
-        self._arm.GripperCtrl(gripper_val, 1000, 0x01, 0)
+    def _open_gripper(self):
+        self._arm.GripperCtrl(0, 1000, 0x01, 0)
+
+    def _close_gripper(self):
+        self._arm.GripperCtrl(1000, 1000, 0x01, 0)
 
     def _wait_for_motion(self, timeout: float = 10.0, poll: float = 0.05):
         """Block until arm reports motion complete or timeout."""
