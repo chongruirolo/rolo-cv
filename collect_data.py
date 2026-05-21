@@ -42,11 +42,13 @@ def main():
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
     cam_cfg = cfg.get("camera", {})
+    roi = cfg.get("vision", {}).get("roi")
 
     existing = [f for f in os.listdir(args.out_dir) if f.endswith(".jpg")]
     count = len(existing)
 
-    print(f"Saving frames to {args.out_dir}/")
+    roi_msg = f"ROI crop {roi}" if roi else "full frame (no ROI set)"
+    print(f"Saving frames to {args.out_dir}/  [{roi_msg}]")
     print(f"{count} frames already collected.")
     print("Press SPACE to save a frame, q to quit.")
 
@@ -63,14 +65,28 @@ def main():
             rgb, _ = cam.capture()
             bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
-            # Status overlay
-            cv2.rectangle(bgr, (0, 0), (bgr.shape[1], 32), (30, 30, 30), -1)
+            # Crop to ROI if set — saved images match exactly what the model sees
+            if roi is not None:
+                h, w = bgr.shape[:2]
+                x1f, y1f, x2f, y2f = roi
+                rx1, ry1 = int(x1f * w), int(y1f * h)
+                rx2, ry2 = int(x2f * w), int(y2f * h)
+                save_frame = bgr[ry1:ry2, rx1:rx2]
+                # Draw ROI boundary on the preview only
+                preview = bgr.copy()
+                cv2.rectangle(preview, (rx1, ry1), (rx2, ry2), (0, 255, 0), 2)
+            else:
+                save_frame = bgr
+                preview = bgr
+
+            # Status overlay on preview
+            cv2.rectangle(preview, (0, 0), (preview.shape[1], 32), (30, 30, 30), -1)
             cv2.putText(
-                bgr, f"Saved: {count}  |  SPACE=save  q=quit",
-                (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (220, 220, 220), 1,
+                preview, f"Saved: {count}  |  SPACE=save  q=quit  [{roi_msg}]",
+                (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1,
             )
 
-            cv2.imshow(window, bgr)
+            cv2.imshow(window, preview)
             key = cv2.waitKey(1) & 0xFF
 
             if key == ord("q"):
@@ -78,7 +94,7 @@ def main():
             if key == ord(" "):
                 ts = int(time.time() * 1000)
                 path = os.path.join(args.out_dir, f"frame_{ts}.jpg")
-                cv2.imwrite(path, bgr)
+                cv2.imwrite(path, save_frame)
                 count += 1
                 print(f"  [{count}] saved {path}")
 

@@ -1,8 +1,6 @@
 # rolo-cv — Chicken Wing Pick-and-Place Pipeline
 
-A computer vision pipeline that detects individual chicken wings on a cutting board using an RGB-D camera and commands a robot arm with a finger gripper to pick and drop them one at a time.
-
----
+Detects individual chicken wings on a cutting board with an RGB-D camera and commands a robot arm to pick and drop them one at a time.
 
 ## Hardware
 
@@ -12,332 +10,190 @@ A computer vision pipeline that detects individual chicken wings on a cutting bo
 | Robot | AgileX Piper 6-DOF arm |
 | Gripper | Finger gripper end-effector |
 
----
-
 ## How It Works
 
-Every frame the pipeline does the following:
-
 ```
-Orbbec Gemini 336L
+Orbbec Gemini 336L  →  RGB + depth frame
         │
-        ├── RGB image (1280×720)
-        └── Depth image (float32, metres)
-        │
-        ▼
-vision.py — segment each wing
-  • Crop frame to ROI (cutting board area only)
-  • Run YOLO or FastSAM to get per-wing masks
-  • For each wing: read median depth from sensor
-  • Fit a 3D plane to the cutting board surface (SVD)
-  • Compute each wing's height above the board
-  • Filter: keep only objects 1–10 cm above the board
-        │
-        ▼
-pick_point.py — score every wing, pick the best
-  • Isolation   (35%) — clearance for gripper fingers
-  • Height      (30%) — prefer flat/low wings over stacked
-  • Confidence  (20%) — how certain the model is
-  • Flatness    (15%) — reasonably flat surface for grip
-        │
-        ▼
-geometry.py — convert pixel to robot coordinate
-  • pixel + depth → 3D camera frame (using intrinsics)
-  • camera frame → robot base frame (using T_cam_to_robot)
-        │
-        ▼
-robot_controller.py — physical pick sequence
-  1. Open gripper
-  2. Hover 10 cm above target
-  3. Descend to wing
-  4. Close gripper, dwell 0.3s
-  5. Lift back up
-  6. Move to drop zone
-  7. Open gripper to release
-  8. Return home
-        │
-        └── Repeat until board is empty
+        ▼  vision.py        segment wings, measure height above board via SVD plane fit
+        ▼  pick_point.py    score each wing (isolation, height, confidence, flatness)
+        ▼  geometry.py      best-wing pixel → robot XYZ via T_cam_to_robot
+        ▼  robot_controller pick-and-drop sequence (approach → grip → drop)
+        └─ loop until board is empty
 ```
-
----
 
 ## Project Structure
 
 ```
-rolo-cv/
-├── main.py             Orchestration loop — ties everything together
-├── camera.py           Orbbec Gemini 336L driver (pyorbbecsdk)
-├── vision.py           YOLO/SAM segmentation + depth height measurement
-├── pick_point.py       Wing scoring and best-pick selection
-├── geometry.py         Coordinate transforms (pixel → camera → robot)
-├── robot_controller.py AgileX Piper SDK wrapper (pick-and-drop sequence)
-├── visualize.py        Live OpenCV overlay (--show mode)
-├── calibrate.py        Hand-eye calibration utility (run once)
-├── collect_data.py     Training data capture utility
-├── diagnose.py         Model diagnostic — shows raw detections at low confidence
-├── config.yaml         All tuning parameters
-└── requirements.txt
+main.py             Orchestration loop
+camera.py           Orbbec Gemini 336L driver
+vision.py           YOLO/SAM segmentation + depth height measurement
+pick_point.py       Wing scoring and best-pick selection
+geometry.py         Pixel → camera → robot coordinate transforms
+robot_controller.py AgileX Piper SDK wrapper
+visualize.py        Live OpenCV overlay (--show)
+drop_tracker.py     Slot-based counter for wings in the drop zone
+calibrate.py        Hand-eye calibration utility
+collect_data.py     Training data capture
+diagnose.py         Single-frame detection diagnostic
+config.yaml         All tuning parameters
 ```
-
----
 
 ## Setup
 
-### 1. Clone and create environment
-
 ```bash
-git clone https://github.com/chongruirolo/rolo-cv.git
-cd rolo-cv
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-```
 
-### 2. Install Orbbec camera SDK
+# Orbbec SDK (not on PyPI)
+git clone https://github.com/orbbec/pyorbbecsdk && (cd pyorbbecsdk && pip install -e .)
 
-Not on PyPI — must be built from source:
-
-```bash
-git clone https://github.com/orbbec/pyorbbecsdk
-cd pyorbbecsdk && pip install -e .
-```
-
-### 3. Install robot SDK
-
-```bash
+# Robot SDK
 pip install piper-sdk
-```
 
-### 4. Download model weights
-
-```bash
-# FastSAM (works immediately, no training needed)
+# Model weights
 wget https://github.com/ultralytics/assets/releases/download/v0.0.0/FastSAM-s.pt
-wget https://github.com/ultralytics/assets/releases/download/v0.0.0/FastSAM-x.pt
-
-# YOLOv8 base model (needed for fine-tuning)
 wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n-seg.pt
 ```
 
----
-
 ## Running
 
-### Test vision only (no robot)
-
 ```bash
-python main.py --dry-run --show
+python main.py --dry-run --show   # vision only, live OpenCV window, press q to quit
+python main.py                    # full run with robot connected
+python diagnose.py                # one-shot detection diagnostic → diagnose_output.jpg
 ```
 
-`--dry-run` skips all robot movement. `--show` opens a live OpenCV window with detections overlaid. Press `q` to quit.
+## Configuration
 
-### Full run (robot connected)
-
-```bash
-python main.py
-```
-
-### Diagnose what the model is detecting
-
-```bash
-python diagnose.py
-```
-
-Captures one frame, runs the model at near-zero confidence threshold, prints every detection with its score, and saves an annotated image to `diagnose_output.jpg`.
-
----
-
-## Configuration — config.yaml
-
-All tuning parameters are in `config.yaml`. No code changes needed to adjust behaviour.
+All tuning lives in `config.yaml`. The most-touched keys:
 
 ```yaml
-camera:
-  width: 1280
-  height: 720
-  fps: 30
-  T_cam_to_robot:       # 4x4 matrix from calibrate.py — MUST be set before robot use
-
 vision:
-  backend: "sam"        # "sam" = no training needed | "yolo" = trained model
-  model_path: "FastSAM-x.pt"   # or "wings.pt" after training
-  confidence: 0.1       # minimum detection confidence [0–1]
-  iou: 0.45             # NMS overlap threshold [0–1]
-  device: "cpu"         # "cpu" | "cuda" | "mps"
-  roi: [0.2, 0.3, 0.7, 0.6]   # crop region [x1, y1, x2, y2] as frame fractions
-  elevation_min_cm: 1.0        # minimum height above board to count as a wing
-  elevation_max_cm: 10.0       # maximum height (filters out background objects)
+  backend: "yolo"       # "yolo" = trained wings.pt | "sam" = zero-shot FastSAM
+  model_path: "models/wings.pt"
+  confidence: 0.1       # detector threshold
+  iou: 0.45             # NMS overlap threshold
+  roi: [0.35, 0.1, 1.0, 0.85]   # crop region, fractions of frame
+  elevation_min_cm: 1.0
+  elevation_max_cm: 10.0
+
+drop_tracker:
+  max_match_dist_px: 80.0          # Hungarian cap — max wing motion per frame
+  decay_frames: 30                 # slot dropped after this many frames with no match
+  dedup_enabled: true              # collapse duplicate masks of one wing
+  dedup_radius_px: 25.0
+  dedup_depth_tolerance_m: 0.012
 ```
 
-### Switching between backends
+## Detection
 
-```yaml
-# FastSAM — works immediately, no training, segments everything in ROI
-backend: "sam"
-model_path: "FastSAM-x.pt"
+Two interchangeable backends in `vision.py`. **FastSAM** is zero-shot and segments everything; an elevation filter (1–10 cm above the board) keeps only board-level objects. **YOLOv8-seg** is the trained model (`models/wings.pt`) — more accurate, requires labelled data. Switch via the `backend` key.
 
-# Trained YOLO — best accuracy, requires wings.pt from training step
-backend: "yolo"
-model_path: "wings.pt"
-```
-
----
-
-## Detection Backends
-
-### FastSAM (current, no training needed)
-
-FastSAM segments every distinct object in the frame automatically with no class labels. The elevation filter then keeps only objects sitting 1–10 cm above the cutting board surface. Works immediately but will also segment non-wing objects inside the ROI.
-
-### YOLOv8-seg (recommended for production)
-
-A fine-tuned YOLOv8 segmentation model trained specifically on your chicken wings. Gives labelled, reliable detections in any lighting condition. Requires training data — see Training section below.
-
----
-
-## Height Measurement
-
-The pipeline computes how far above the cutting board each wing is sitting. This is used to distinguish flat wings (on the board) from stacked wings (on top of another wing).
-
-Method:
-1. Dilate the combined wing mask outward — this reveals the cutting board surface around the wings
-2. Back-project those border pixels into 3D using camera intrinsics
-3. Fit a plane to those 3D points using SVD (handles camera tilt automatically)
-4. For each wing, compute the perpendicular distance from the wing to the fitted plane
-
-For specular wings (shiny skin reflects IR → depth = 0), the pipeline reads depth from a ring of pixels around the wing blob instead of the wing surface itself.
-
-Output in logs:
-- `[flat]` — height 0–3 cm, wing is on the board
-- `[STACKED]` — height > 3 cm, wing is on top of another wing
-
----
+Height per wing is computed by fitting an SVD plane to a dilated ring around each mask and measuring the perpendicular distance. Specular wings (depth = 0 on raw skin) fall back to reading depth from the ring of pixels around the wing.
 
 ## Pick Scoring
 
-Every detected wing is scored on four factors. The highest-scoring wing is sent to the robot.
+Every wing is scored on four factors; the highest scorer is sent to the robot.
 
 | Factor | Weight | Why |
 |---|---|---|
 | Isolation | 35% | Gripper fingers need clearance on both sides |
 | Height | 30% | Prefer flat/low wings — more stable to grasp |
 | Confidence | 20% | Model certainty |
-| Flatness | 15% | Reasonably flat surface helps consistent grip |
+| Flatness | 15% | Consistent grip |
 
-Isolation is weighted highest because gripper fingers need clear space on both sides of the wing to close. Weights are in `pick_point.py` and will be tuned over time using pick outcome data.
+---
+
+## Counting Wings in the Drop Zone
+
+Counting wings in a box from a top-down camera looks trivial but is the hardest signal-processing problem in the pipeline. Wings stack, occlude each other, the detector flickers, chicken skin scatters IR depth, and mask boundaries wobble. A raw count is noisy; a monotonic count drifts upward and never recovers; and nothing visual can see through a wing to count what's underneath.
+
+### The three-signal philosophy
+
+Instead of asking one detector to do everything, the design uses **three independent measurement systems** with different blind spots. When all agree, the count is trustworthy. When they disagree, the *kind* of disagreement is itself useful information.
+
+| Signal | Measures | Blind to |
+|---|---|---|
+| **Vision tracker** ✅ | Wings currently visible, tracked over time | Stacked / occluded wings |
+| **Robot ledger** 🔜 | Wings the robot has placed | Wings added by hand |
+| **Depth volume** 🔜 | Total mass above the box floor | Exact integer counts |
+
+Divergence examples:
+
+> `robot=5, visible=3, volume=5` → two stacked. Robot is right.
+> `robot=5, visible=4, volume=4` → a wing fell out.
+> `robot=5, visible=7, volume=7` → wings added by hand → operator alert.
+
+Industrial-inspection pattern: **agreement = trustworthy, disagreement = informative**.
+
+### Vision tracker (current)
+
+```
+detections → confidence filter → DEDUP (close in XY AND depth)
+           → Hungarian assignment → slot snap / append / decay
+           → count = number of currently-tracked slots
+```
+
+Dedup is the key step. The detector often emits multiple overlapping masks for one wing; without dedup these become duplicate slots. Requiring both image-plane proximity AND depth proximity before collapsing keeps stacked wings (close in XY but different depths) correctly separate.
+
+Hungarian assignment handles wings that move (settling, bumps). Slots that go a full second without a match are dropped — count comes back down when wings are removed.
+
+The HUD shows four diagnostic counters: `Box(raw)` (no memory), `Box(debounce)` (monotonic), `Box(no-dedup)` (tracker with dedup off), `Box(dedup)` (canonical visible count). The gap between the last two is the live value dedup is adding.
+
+### Why no vision-based stack detection
+
+The natural question is "can we just detect stacks from depth?" — and the honest answer is no, for a **physical** reason. The signal you'd need is a ~2 cm depth gap (one wing thickness). But the depth sensor's noise on chicken skin is also 1–2 cm — specular reflection scatters the IR pattern exactly where we need precision. Signal-to-noise is ~2:1.
+
+Every threshold tested either flickered (overcount) or missed real stacks (undercount). No tuning saves this. A top-down view of a perfectly aligned stack contains no information distinguishing 2 wings from 5 — no algorithm can recover information that isn't in the pixels.
+
+The right move is to source the count from a signal that **does** carry it: the robot already knows when it released a wing. That's the upcoming robot ledger.
 
 ---
 
 ## Training a Custom Model
 
-The trained model will significantly outperform FastSAM for your specific setup.
-
-### Step 1 — Collect images
-
 ```bash
-python collect_data.py
+python collect_data.py            # space to save a frame, aim for 200–300
 ```
 
-Press **space** to save a frame. Aim for 200–300 images. Vary wing count and arrangement — full board, small groups, touching wings, stacked wings.
-
-### Step 2 — Label on Roboflow
-
-1. Create a free account at [roboflow.com](https://roboflow.com)
-2. New project → **Instance Segmentation** → name it `wings`
-3. Upload all images from `data/images/`
-4. Use the **Smart Polygon tool** to trace around each wing → label `wing`
-5. After 20 manual labels, use **Auto-Label** to pre-annotate the rest
-6. Export → **YOLOv8 format** → download zip → extract into `data/`
-
-### Step 3 — Train
+Label on [roboflow.com](https://roboflow.com) → Instance Segmentation project → upload from `data/images/` → Smart Polygon → export YOLOv8 format → extract into `data/`.
 
 ```bash
-yolo train \
-  model=yolov8n-seg.pt \
-  data=data/data.yaml \
-  epochs=100 \
-  imgsz=640 \
-  batch=16 \
-  name=wings
-```
-
-Training takes ~1 hour on a laptop GPU or 20-40 minutes on Google Colab (free).
-
-### Step 4 — Deploy
-
-```bash
+yolo train model=yolov8n-seg.pt data=data/data.yaml epochs=100 imgsz=640 batch=16 name=wings
 cp runs/segment/wings/weights/best.pt wings.pt
 ```
 
-Update `config.yaml`:
-```yaml
-backend: "yolo"
-model_path: "wings.pt"
-confidence: 0.5
-```
-
----
+Then in `config.yaml`: `backend: "yolo"`, `model_path: "wings.pt"`, `confidence: 0.5`.
 
 ## Hand-Eye Calibration
 
-Required before the robot can move to the correct position. The `T_cam_to_robot` matrix in `config.yaml` is currently an identity placeholder and must be replaced with a real calibration result.
+`T_cam_to_robot` in `config.yaml` must be set before robot use. Re-run after the camera or robot is moved.
 
 ```bash
 python calibrate.py
 ```
 
-**Procedure:**
-1. A window opens showing the live camera feed with depth overlay
-2. Move the robot end-effector to a position on the cutting board
-3. Left-click the tip in the camera window
-4. Type the robot XYZ in metres at the terminal prompt (read from teach pendant)
-5. Repeat for at least 4 positions spread across the board at 2 different heights
-6. Press `s` to solve — aim for RMS residual < 10 mm
-7. Type `y` to save the result to `config.yaml`
+Procedure: place a marker on the board, click it in the camera window (captures depth), move the robot end-effector to touch the marker, type its XYZ in metres. Repeat ≥ 4 points across the board at 2 heights. Press `s` to solve (aim for RMS < 10 mm), `y` to save. Press `v` for verify mode.
 
-Press `v` at any time to enter verify mode — click any pixel to see its depth and 3D camera coordinates.
+## Camera Setup
 
-**Re-run calibration whenever:**
-- The camera is physically moved or knocked
-- The robot is remounted or repositioned
+Mount **top-down**, 60–80 cm above the board, fixed rigidly. The full board must fall within the ROI.
 
----
-
-## Camera Notes
-
-The Orbbec Gemini 336L outputs depth as uint16 millimetres. The pipeline converts to metres by multiplying by 0.001 (hardcoded — do not change for this sensor model).
-
-Depth returns zero (no reading) for:
-- Shiny/specular surfaces (raw chicken skin reflects IR)
-- Very dark surfaces (absorb IR)
-- Transparent surfaces
-- Surfaces at steep angles to the sensor
-- Objects outside the 0.15–3.0 m range
-
-The pipeline handles specular wings by reading depth from the cutting board surface immediately around each wing instead of the wing surface itself.
-
----
-
-## Camera Mounting
-
-- Mount **top-down**, pointing straight at the board
-- Height: **60–80 cm** above the board surface
-- Fix rigidly — any movement after calibration requires recalibration
-- Ensure the full cutting board is visible within the ROI
-
----
+The Orbbec returns depth as uint16 mm (pipeline converts ×0.001 to metres). Depth returns zero for specular, very dark, transparent, or steep-angle surfaces, and outside 0.15–3.0 m.
 
 ## Roadmap
 
-- [x] RGB-D camera driver with depth scale fix
-- [x] FastSAM zero-shot segmentation backend
-- [x] YOLOv8-seg backend (awaiting training data)
-- [x] SVD plane fitting for height measurement
-- [x] Pick scoring (isolation-prioritised for gripper)
-- [x] ROI crop to restrict detection area
+- [x] RGB-D camera driver + depth scale fix
+- [x] FastSAM + YOLOv8-seg backends
+- [x] SVD plane fit for wing height
+- [x] Pick scoring (isolation-prioritised)
 - [x] Hand-eye calibration utility
-- [x] Training data collection utility
-- [ ] Collect and label training dataset
+- [x] Drop-zone vision tracker (Hungarian + slot decay + 2D dedup)
+- [x] Live four-counter HUD for tracker debugging
 - [ ] Train wings.pt on labelled data
-- [ ] Run hand-eye calibration
+- [ ] Run hand-eye calibration on production rig
+- [ ] Robot ledger — primary count from `pick_and_drop()` events
+- [ ] Depth volume estimator — mass-based cross-check
+- [ ] Divergence detector — alert on robot/visible/volume disagreement
 - [ ] Pick outcome logging for RL weight tuning

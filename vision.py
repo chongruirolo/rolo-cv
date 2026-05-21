@@ -21,6 +21,10 @@ After segmentation, both backends compute depth and height above the cutting boa
 from the Orbbec depth sensor using SVD plane fitting.
 """
 
+"""
+calls the segmentation masks and does the math to get the height via using SVD on a plane
+"""
+
 from dataclasses import dataclass
 
 import cv2
@@ -100,7 +104,8 @@ class _YoloBackend:
     def segment(self, rgb):
         """Returns list of (mask_uint8, confidence, label, bbox)."""
         h, w = rgb.shape[:2]
-        results = self._model(rgb, conf=self._conf, iou=self._iou,
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        results = self._model(bgr, conf=self._conf, iou=self._iou,
                               device=self._device, verbose=False)
         out = []
         for r in results:
@@ -175,7 +180,7 @@ class FoodDetector:
         intrinsics: CameraIntrinsics | None = None,
         confidence: float = 0.3,
         iou: float = 0.45,
-        device: str = "cpu",
+        device: str = "cuda",
         elevation_min_h: float = 0.01,
         elevation_max_h: float = 0.10,
         roi: list | None = None,
@@ -273,14 +278,5 @@ class FoodDetector:
             self._update_table_plane(blobs, depth)
             for det, blob in zip(detections, blobs):
                 det.height_above_table_m = self._measure_height(blob, depth)
-
-        # Keep only objects sitting on the cutting board at the right height.
-        # For SAM this is the primary filter replacing class labels.
-        # For YOLO this removes background detections at wrong depth.
-        if self._table_plane_cache is not None:
-            detections = [
-                d for d in detections
-                if self._elev_min_h <= d.height_above_table_m <= self._elev_max_h
-            ]
 
         return detections

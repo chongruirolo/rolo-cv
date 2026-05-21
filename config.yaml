@@ -2,52 +2,52 @@ camera:
   width: 1280
   height: 720
   fps: 30
-  # 4x4 rigid transform from camera frame to robot base frame.
-  # Replace with your hand-eye calibration result.
-  # Identity matrix is a placeholder — robot coords will be WRONG until calibrated.
   T_cam_to_robot:
-    - [1.0, 0.0, 0.0, 0.0]
-    - [0.0, 1.0, 0.0, 0.0]
-    - [0.0, 0.0, 1.0, 0.0]
-    - [0.0, 0.0, 0.0, 1.0]
-
+  - - -0.9902273404955194
+    - 0.006952909571952001
+    - 0.1392891639132594
+    - 0.20691321427019893
+  - - 0.020831928240430956
+    - 0.9949255652466529
+    - 0.09843348202930079
+    - -0.30599780338542326
+  - - -0.1378979510397313
+    - 0.1003731869928987
+    - -0.9853473389784602
+    - 0.6822422462021182
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
 vision:
-  # Path to YOLO model weights.
-  # yolov8s-worldv2.pt — zero-shot, works immediately, no training needed.
-  # wings.pt           — your trained model, much better accuracy.
-  # backend: "yolo" — needs trained model, gives class labels
-  # backend: "sam"  — works immediately, no training, segments everything
-  backend: "yolo"
-
-  # yolo backend: "yolov8n-seg.pt" (generic) 
-  # sam  backend: "FastSAM-s.pt" (fast) or "FastSAM-x.pt" (accurate)
-  model_path: "yolov8n-seg.pt"
-
-  # Minimum YOLO confidence to accept a detection [0–1].
-  # Lower = more detections but more false positives.
+  backend: yolo
+  model_path: models/wings.pt
   confidence: 0.1
-
-  # Non-maximum suppression IoU threshold [0–1].
-  # Lower = stricter overlap removal (fewer merged detections).
   iou: 0.45
-
-  # Inference device: "cpu", "cuda" (Nvidia GPU), or "mps" (Apple silicon).
-  device: "cpu"
-
-  # Region of interest as fractions of frame size [x1, y1, x2, y2].
-  # Only this area is passed to the model — everything outside is ignored.
-  # [0.0, 0.0, 0.5, 0.5] = top-left quarter (where the chopping board is).
-  roi: null
-
-  # Elevation band for height filtering (centimetres above the cutting board).
+  device: cuda
+  roi:
+  - 0.35
+  - 0.1
+  - 1.0
+  - 0.85
   elevation_min_cm: 1.0
   elevation_max_cm: 10.0
-
+drop_tracker:
+  max_match_dist_px: 80.0          # Hungarian cap: max pixels a wing can move and still snap to its existing slot
+  decay_frames: 30                 # drop a slot after this many consecutive frames with no match (30 @ 30fps = 1 s)
+  min_confidence: 0.3              # min detection confidence considered by tracker
+  slot_radius_px: 30.0             # render footprint for visualize.py (no functional effect)
+  dedup_enabled: true              # master switch — set false to feed raw detector output through the tracker
+  dedup_radius_px: 25.0            # XY threshold for two detections to potentially be duplicates
+  dedup_depth_tolerance_m: 0.012   # depth diff under which XY-close detections are treated as the SAME wing
 robot:
-  can_interface: "can0"
-
-# Drop zone in robot base frame (metres) — also set in robot_controller.py
-drop_zone_xyz: [0.35, -0.20, 0.15]
-
-# Safety limit on total picks per run
+  can_interface: can0
+  # How far below the detected wing surface the gripper descends to grip.
+  # The depth sensor sees the top of the wing; the gripper needs to close
+  # around the middle. Start at 0.02 (2 cm) and tune up/down.
+  grip_z_offset_m: 0.02
+drop_zone_xyz:
+- 0.35
+- -0.2
+- 0.15
 max_picks: 50
