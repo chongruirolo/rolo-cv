@@ -24,13 +24,18 @@ MOVE_SPEED = 0.3
 
 
 class RobotController:
-    def __init__(self, can_interface: str = "can0"):
+    def __init__(self, can_interface: str = "can0", grip_z_offset_m: float = 0.02):
         """
         can_interface: CAN bus port the Piper is connected on (e.g. "can0").
         """
+        self._grip_z_offset = grip_z_offset_m
         from piper_sdk import C_PiperInterface
         self._arm = C_PiperInterface(can_interface)
         self._arm.ConnectPort()
+        self._arm.MasterSlaveConfig(0xFC, 0, 0, 0)
+        time.sleep(0.1)
+        self._arm.MotionCtrl_1(0x00, 0x00, 0x02)  # exit drag-teach mode
+        time.sleep(0.1)
         self._arm.EnableArm(7)      # enable all joints
         time.sleep(1.0)
 
@@ -64,8 +69,9 @@ class RobotController:
         # 2. Approach (hover above target)
         self._move_cartesian(x, y, z + APPROACH_CLEARANCE)
 
-        # 3. Descend to pick height
-        self._move_cartesian(x, y, z)
+        # 3. Descend to pick height — offset below top surface so gripper
+        #    closes around the middle of the wing, not above it
+        self._move_cartesian(x, y, z - self._grip_z_offset)
 
         # 4. Close gripper to grip the wing
         self._close_gripper()

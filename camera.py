@@ -5,6 +5,11 @@ Requires pyorbbecsdk built from source:
   cd pyorbbecsdk && pip install -e .
 """
 
+"""
+just have to know this entire modules main purpose is to get info from camera
+output rgb, d
+"""
+
 import cv2
 import numpy as np
 from geometry import CameraIntrinsics

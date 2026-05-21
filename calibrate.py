@@ -5,13 +5,17 @@ Procedure
 ---------
 1. Run:   python calibrate.py
 2. The camera window opens.  Blue = near, red = far in the depth overlay.
-3. Move the robot end-effector (or a calibration pin) to N ≥ 4 positions
-   spread across the work area (different X, Y, and ideally two heights).
-4. At each position:
-     a. Left-click the pixel where the tip appears in the camera window.
-     b. At the terminal prompt, enter the robot XYZ in metres
+3. Keep the robot OUT OF FRAME for each point collection — the depth sensor
+   must see the board clearly, not the robot arm.
+4. Place a small marker (tape X, sticker) on the board at a known spot.
+5. For each point:
+     a. Left-click the marker in the camera window — depth is captured now.
+     b. THEN move the robot end-effector to touch that exact marker.
+     c. At the terminal prompt, enter the robot XYZ in metres
         (read from the teach pendant or robot controller).
-5. Press 's' to solve and write T_cam_to_robot to config.yaml.
+     d. Move the robot away before clicking the next point.
+6. Collect >= 4 points spread across the work area at 2 different heights.
+7. Press 's' to solve and write T_cam_to_robot to config.yaml.
    Press 'u' to undo the last correspondence.
    Press 'v' to enter verify mode (click any pixel to read live depth).
    Press 'q' to quit without saving.
@@ -255,9 +259,11 @@ def main():
                 p_cam = pixel_to_camera(u, v, d, intr)
                 print(f"\nPoint {len(pts_cam)+1}  pixel=({u},{v})  "
                       f"depth={d:.4f} m  cam_xyz={p_cam.round(4)}")
-                raw = input("  Robot XYZ in metres [X Y Z]: ").strip()
+                print("  Now move the robot end-effector to touch this exact spot.")
+                raw = input("  Enter robot XYZ in metres (e.g. [0.1206, -0.1941, 0.1569]): ").strip()
                 try:
-                    vals = [float(x) for x in raw.split()]
+                    cleaned = raw.strip("[]").replace(",", " ")
+                    vals = [float(x) for x in cleaned.split()]
                     assert len(vals) == 3
                 except (ValueError, AssertionError):
                     print("  Bad input — need exactly 3 numbers. Try again.")
