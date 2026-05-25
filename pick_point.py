@@ -12,6 +12,7 @@ The pick order produced by this scorer directly drives the robot: it will
 always attempt the most accessible wing first.
 """
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -27,6 +28,19 @@ class PickPoint:
     depth_m: float
     score: float
     detection: Detection
+    yaw_rad: float = 0.0         # commanded gripper Rz: wing axis + pi/2 (jaws close across the wing)
+    yaw_image_rad: float = 0.0   # wing long axis in image space (for visualization only)
+
+
+@dataclass
+class BoxPoint:
+    """Drop-zone (black box) target, mirrors PickPoint."""
+    u: int
+    v: int
+    depth_m: float
+    robot_xyz: np.ndarray        # [x, y, z] in robot base frame, metres
+    yaw_rad: float = 0.0         # commanded gripper Rz over the box: box axis + pi/2
+    yaw_image_rad: float = 0.0   # box long axis in image space (visualization only)
 
 
 def _centroid(mask: np.ndarray) -> tuple[float, float]:
@@ -46,6 +60,53 @@ def _depth_flatness(mask: np.ndarray, depth: np.ndarray) -> float:
     pixels = depth[mask > 0]
     valid = pixels[(pixels > 0.05) & (pixels < 5.0)]
     return float(np.std(valid)) if len(valid) >= 10 else float("inf")
+
+
+def wrap_half_turn(a: float) -> float:
+    """Wrap an undirected-axis angle to (-pi/2, pi/2]."""
+    if a > math.pi / 2:
+        a -= math.pi
+    elif a <= -math.pi / 2:
+        a += math.pi
+    return a
+
+
+def principal_axis_yaw_robot(
+    mask: np.ndarray,
+    R_cam_to_robot: np.ndarray,
+) -> tuple[float, float]:
+    """
+    Returns (yaw_robot_rad, yaw_image_rad), each wrapped to (-pi/2, pi/2].
+
+    PCA on the mask gives a unit direction (du, dv) in image space, which
+    coincides with the camera's XY plane: image +u = camera +X, image +v =
+    camera +Y. Rotating (du, dv, 0) by the camera->robot rotation R and
+    taking atan2 of the robot XY components gives the yaw the gripper needs.
+    The image-frame angle is returned alongside so the visualizer can draw
+    the axis on the camera feed.
+    """
+    ys, xs = np.where(mask > 0)
+    if len(xs) < 10:
+        return 0.0, 0.0
+
+    cu = xs.mean()
+    cv = ys.mean()
+    pts = np.stack([xs - cu, ys - cv], axis=0).astype(np.float64)   # 2 x N
+    cov = pts @ pts.T / pts.shape[1]
+    eigvals, eigvecs = np.linalg.eigh(cov)        # ascending
+    if eigvals[-1] < 1e-6:                        # degenerate / single-pixel blob
+        return 0.0, 0.0
+    du, dv = eigvecs[:, -1]
+
+    yaw_image_rad = wrap_half_turn(math.atan2(float(dv), float(du)))
+
+    axis_cam = np.array([du, dv, 0.0], dtype=np.float64)
+    axis_robot = R_cam_to_robot @ axis_cam
+    yaw_axis_robot = math.atan2(float(axis_robot[1]), float(axis_robot[0]))
+    # Gripper jaws close across the wing, so command axis + pi/2.
+    yaw_robot_rad = wrap_half_turn(yaw_axis_robot + math.pi / 2)
+
+    return yaw_robot_rad, yaw_image_rad
 
 
 def score_all_detections(
@@ -107,6 +168,7 @@ def score_all_detections(
 def select_pick_point(
     detections: list[Detection],
     depth: np.ndarray,
+    T_cam_to_robot: np.ndarray,
 ) -> PickPoint | None:
     scored = score_all_detections(detections, depth)
     if not scored:
@@ -117,4 +179,9 @@ def select_pick_point(
     valid = patch[(patch > 0.05) & (patch < 5.0)]
     depth_m = float(np.median(valid)) if len(valid) > 0 else 0.0
 
-    return PickPoint(u=u, v=v, depth_m=depth_m, score=score, detection=det)
+    yaw_rad, yaw_image_rad = principal_axis_yaw_robot(det.mask, T_cam_to_robot[:3, :3])
+
+    return PickPoint(
+        u=u, v=v, depth_m=depth_m, score=score, detection=det,
+        yaw_rad=yaw_rad, yaw_image_rad=yaw_image_rad,
+    )

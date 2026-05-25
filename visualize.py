@@ -7,11 +7,13 @@ onto the RGB frame, then shows it in an OpenCV window.
 Returns True while the window is open, False when the user presses 'q'.
 """
 
+import math
+
 import cv2
 import numpy as np
 
 from vision import Detection
-from pick_point import PickPoint
+from pick_point import PickPoint, BoxPoint
 
 # Distinct BGR colours for up to 10 simultaneous detections.
 _PALETTE = [
@@ -41,6 +43,7 @@ def draw_frame(
     raw_count: int = 0,
     tracker=None,   # DropTracker instance — draws slots and candidates if provided
     filter_enabled: bool = False,
+    box_point: BoxPoint | None = None,
 ) -> int:
     """
     Overlay detections and pick point on `rgb`, display in a named window.
@@ -98,6 +101,9 @@ def draw_frame(
         if pick is not None:
             _draw_pick(frame, pick)
 
+        if box_point is not None:
+            _draw_box_target(frame, box_point)
+
     # Filter toggle button — top-right corner
     btn_label = "Filter [F]: ON" if filter_enabled else "Filter [F]: OFF"
     btn_color = (0, 200, 0) if filter_enabled else (0, 0, 180)
@@ -138,8 +144,61 @@ def _draw_box(frame: np.ndarray, det: Detection, color: tuple) -> None:
 
 def _draw_pick(frame: np.ndarray, pick: PickPoint) -> None:
     u, v = pick.u, pick.v
+
+    # Long-axis line (red) — wing's principal axis in image space.
+    L = 50  # half-length in px
+    du, dv = math.cos(pick.yaw_image_rad), math.sin(pick.yaw_image_rad)
+    p1 = (int(u - L * du), int(v - L * dv))
+    p2 = (int(u + L * du), int(v + L * dv))
+    cv2.line(frame, p1, p2, (0, 0, 255), 2, cv2.LINE_AA)
+
+    # Jaw-closing direction (cyan, dashed-ish) — perpendicular to the axis.
+    # This is the direction the gripper fingers will travel.
+    px, py = -dv, du
+    Jhalf = 22
+    j1 = (int(u - Jhalf * px), int(v - Jhalf * py))
+    j2 = (int(u + Jhalf * px), int(v + Jhalf * py))
+    cv2.line(frame, j1, j2, (255, 255, 0), 2, cv2.LINE_AA)
+
     cv2.circle(frame, (u, v), 10, (0, 0, 255), 2)
     cv2.circle(frame, (u, v), 2, (0, 0, 255), -1)
-    info = f"PICK  depth={pick.depth_m:.3f}m  score={pick.score:.2f}"
+
+    rz_deg = math.degrees(pick.yaw_rad)
+    info = f"PICK  depth={pick.depth_m:.3f}m  score={pick.score:.2f}  Rz={rz_deg:+.1f}°"
     cv2.putText(frame, info, (u + 14, v + 5),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1, cv2.LINE_AA)
+
+
+def _draw_box_target(frame: np.ndarray, box: BoxPoint) -> None:
+    """Magenta overlay marking the CV-supplied black-box drop pose."""
+    u, v = box.u, box.v
+    color = (255, 0, 255)  # BGR magenta — distinct from pick (red) and drop-tracker (green)
+
+    # Long axis of the box
+    L = 60
+    du, dv = math.cos(box.yaw_image_rad), math.sin(box.yaw_image_rad)
+    p1 = (int(u - L * du), int(v - L * dv))
+    p2 = (int(u + L * du), int(v + L * dv))
+    cv2.line(frame, p1, p2, color, 2, cv2.LINE_AA)
+
+    # Commanded gripper jaw direction (perpendicular to long axis)
+    px, py = -dv, du
+    Jhalf = 26
+    j1 = (int(u - Jhalf * px), int(v - Jhalf * py))
+    j2 = (int(u + Jhalf * px), int(v + Jhalf * py))
+    cv2.line(frame, j1, j2, color, 1, cv2.LINE_AA)
+
+    # Crosshair on the centroid
+    cv2.drawMarker(frame, (u, v), color, cv2.MARKER_CROSS, 18, 2, cv2.LINE_AA)
+    cv2.circle(frame, (u, v), 12, color, 2)
+
+    x, y, z = box.robot_xyz.tolist()
+    rz_deg = math.degrees(box.yaw_rad)
+    label_lines = [
+        "BOX",
+        f"[{x:+.3f}, {y:+.3f}, {z:+.3f}]m",
+        f"Rz={rz_deg:+.1f}°  depth={box.depth_m:.3f}m",
+    ]
+    for i, text in enumerate(label_lines):
+        cv2.putText(frame, text, (u + 16, v - 8 + i * 14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1, cv2.LINE_AA)
