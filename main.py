@@ -12,12 +12,46 @@ import time
 import numpy as np
 import yaml
 
+from scipy.ndimage import center_of_mass
+
 from camera import Camera
 from vision import FoodDetector, Detection
-from pick_point import select_pick_point, score_all_detections
+import math
+
+from pick_point import (
+    select_pick_point,
+    score_all_detections,
+    principal_axis_yaw_robot,
+    wrap_half_turn,
+    BoxPoint,
+)
 from geometry import pixel_to_robot
 from robot_controller import RobotController
 from drop_tracker import DropTracker
+
+
+def _compute_box_point(
+    det: Detection,
+    depth: np.ndarray,
+    intrinsics,
+    T: np.ndarray,
+) -> BoxPoint | None:
+    """Drop-zone centroid → BoxPoint (pixel, depth, robot xyz, yaw)."""
+    cy, cx = center_of_mass(det.mask)
+    u, v = int(round(cx)), int(round(cy))
+    patch = depth[max(0, v - 3):v + 4, max(0, u - 3):u + 4]
+    valid = patch[(patch > 0.05) & (patch < 5.0)]
+    if len(valid) == 0:
+        return None
+    depth_m = float(np.median(valid))
+    robot_xyz = pixel_to_robot(u, v, depth_m, intrinsics, T)
+    yaw_rad, yaw_image_rad = principal_axis_yaw_robot(det.mask, T[:3, :3])
+    # Box drop wants the +90° version of the principal-axis yaw.
+    yaw_rad = wrap_half_turn(yaw_rad + math.pi / 2)
+    return BoxPoint(
+        u=u, v=v, depth_m=depth_m, robot_xyz=robot_xyz,
+        yaw_rad=yaw_rad, yaw_image_rad=yaw_image_rad,
+    )
 
 # deals with classification problem between wings in box and on board, dont know how to differentiate
 def _box_iou(a: Detection, b: Detection) -> float:
@@ -181,7 +215,7 @@ def main():
                     if d.label == "chicken-wings" and not _overlaps_any(d, in_box)
                 ]
 
-                pick = select_pick_point(pick_candidates, depth) if pick_candidates else None
+                pick = select_pick_point(pick_candidates, depth, T) if pick_candidates else None
                 if pick is not None and robot is not None and pick.depth_m <= 0:
                     pick = None
 
@@ -189,13 +223,31 @@ def main():
                 if pick is not None:
                     robot_xyz = pixel_to_robot(pick.u, pick.v, pick.depth_m, intrinsics, T)
 
-                # Per-second detection log
+                box_point = None
+                if drop_zone_det is not None:
+                    box_point = _compute_box_point(drop_zone_det, depth, intrinsics, T)
+
+                # Detection log, throttled to once every 3 seconds
                 now = time.monotonic()
-                if now - last_log >= 1.0:
+                if now - last_log >= 3.0:
                     if pick is not None and robot_xyz is not None:
                         _log_detections(pick_candidates, depth, pick.u, pick.v)
                         x, y, z = robot_xyz.tolist()
-                        print(f"  → pick_drop(pick=[{x:.4f}, {y:.4f}, {z:.4f}])")
+                        rz_deg = np.degrees(pick.yaw_rad)
+                        if box_point is not None:
+                            bx, by, bz = box_point.robot_xyz.tolist()
+                            box_rz_deg = np.degrees(box_point.yaw_rad)
+                            print(
+                                f"  → pick_drop("
+                                f"pick=[{x:.4f}, {y:.4f}, {z:.4f}], rz={rz_deg:+.1f}°, "
+                                f"box=[{bx:.4f}, {by:.4f}, {bz:.4f}], rz={box_rz_deg:+.1f}°)"
+                            )
+                        else:
+                            reason = "no drop-zone detection" if drop_zone_det is None else "drop-zone has no valid depth"
+                            print(
+                                f"  → pick_drop(pick=[{x:.4f}, {y:.4f}, {z:.4f}], rz={rz_deg:+.1f}°, "
+                                f"box=<unavailable: {reason}>)"
+                            )
                     else:
                         ts = datetime.datetime.now().strftime("%H:%M:%S")
                         print(f"[{ts}] 0 wing(s) detected")
@@ -211,6 +263,7 @@ def main():
                         raw_count=len(in_box),
                         tracker=drop_tracker,
                         filter_enabled=show_overlays,
+                        box_point=box_point,
                     )
                     if key == ord("q"):
                         print("Window closed by user.")
@@ -221,8 +274,15 @@ def main():
                     _prev_key = key
 
                 if robot is not None and robot_xyz is not None:
-                    robot.pick_and_drop(robot_xyz)
-                    pick_count += 1
+                    if box_point is None:
+                        reason = "no drop-zone detection" if drop_zone_det is None else "drop-zone has no valid depth"
+                        print(f"  [skip] {reason}")
+                    else:
+                        robot.pick_and_drop(
+                            robot_xyz, box_point.robot_xyz,
+                            pick.yaw_rad, box_point.yaw_rad,
+                        )
+                        pick_count += 1
 
     except KeyboardInterrupt:
         print("\nStopped by user.")

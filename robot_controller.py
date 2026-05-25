@@ -13,8 +13,9 @@ import time
 import numpy as np
 
 
-# Hardcoded drop zone in robot base frame (metres). Tune to your setup.
-DROP_ZONE_XYZ = np.array([0.35, -0.20, 0.15])
+# Transit waypoint passed through on the way back home, to keep the
+# arm clear of the tray/box after a drop. Tune to your setup.
+TRANSIT_XYZ = np.array([0.25, 0.00, 0.25])
 
 # How far above the target to hover before descending (metres)
 APPROACH_CLEARANCE = 0.10
@@ -49,17 +50,30 @@ class RobotController:
         self._arm.JointCtrl(0, 0, 0, 0, 0, 0)
         self._wait_for_motion()
 
-    def pick_and_drop(self, robot_xyz: np.ndarray):
+    def pick_and_drop(
+        self,
+        robot_xyz: np.ndarray,
+        box_xyz: np.ndarray,
+        pick_yaw_rad: float = 0.0,
+        box_yaw_rad: float = 0.0,
+    ):
         """
-        Full pick sequence:
+        Full pick sequence. Each yaw rotates the gripper about the robot Z
+        axis at its respective coordinate; Rx/Ry stay 0 so the wrist points
+        straight down.
+
+        robot_xyz / pick_yaw_rad: wing pick pose (CV).
+        box_xyz   / box_yaw_rad:  black-box drop pose (CV).
+
           1. Open gripper
-          2. Move above target
+          2. Move above target (with pick_yaw)
           3. Descend
           4. Close gripper
           5. Lift
-          6. Move to drop zone
+          6. Move over black box (with box_yaw)
           7. Open gripper to release
-          8. Return home
+          8. Move to transit waypoint
+          9. Return home
         """
         x, y, z = robot_xyz.tolist()
 
@@ -67,42 +81,46 @@ class RobotController:
         self._open_gripper()
 
         # 2. Approach (hover above target)
-        self._move_cartesian(x, y, z + APPROACH_CLEARANCE)
+        self._move_cartesian(x, y, z + APPROACH_CLEARANCE, pick_yaw_rad)
 
         # 3. Descend to pick height — offset below top surface so gripper
         #    closes around the middle of the wing, not above it
-        self._move_cartesian(x, y, z - self._grip_z_offset)
+        self._move_cartesian(x, y, z - self._grip_z_offset, pick_yaw_rad)
 
         # 4. Close gripper to grip the wing
         self._close_gripper()
         time.sleep(0.3)     # brief dwell to confirm grip
 
         # 5. Lift back to approach height
-        self._move_cartesian(x, y, z + APPROACH_CLEARANCE)
+        self._move_cartesian(x, y, z + APPROACH_CLEARANCE, pick_yaw_rad)
 
-        # 6. Move to drop zone (approach height)
-        dx, dy, dz = DROP_ZONE_XYZ.tolist()
-        self._move_cartesian(dx, dy, dz + APPROACH_CLEARANCE)
+        # 6. Move over the black box (coords + yaw from CV)
+        bx, by, bz = box_xyz.tolist()
+        self._move_cartesian(bx, by, bz + APPROACH_CLEARANCE, box_yaw_rad)
 
-        # 7. Release
+        # 7. Release into the box
         self._open_gripper()
         time.sleep(0.2)
 
-        # 8. Home
+        # 8. Transit waypoint on the way back, clear of the box
+        tx, ty, tz = TRANSIT_XYZ.tolist()
+        self._move_cartesian(tx, ty, tz)
+
+        # 9. Home
         self.home()
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _move_cartesian(self, x: float, y: float, z: float):
+    def _move_cartesian(self, x: float, y: float, z: float, yaw_rad: float = 0.0):
         """Move end-effector to (x, y, z) in robot base frame. Blocking."""
         # Piper SDK expects mm; convert metres -> mm.
-        # Orientation: keep wrist pointing straight down (Rx=0, Ry=0, Rz=0).
+        # Wrist stays pointing straight down (Rx=0, Ry=0); Rz aligns the jaws.
+        rz_deg = np.degrees(yaw_rad)
         self._arm.EndPoseCtrl(
             int(x * 1000), int(y * 1000), int(z * 1000),
-            0, 0, 0,
-            int(MOVE_SPEED * 100)
+            0, 0, int(rz_deg),
         )
         self._wait_for_motion()
 
